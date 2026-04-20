@@ -816,7 +816,7 @@
 </main>
 
 <footer>
-  Hecho para <strong>Team ERP · Buk</strong> · Los datos se guardan localmente en tu navegador
+  Hecho para <strong>Team ERP · Buk</strong> · Datos sincronizados en tiempo real con <strong>Firebase Firestore</strong> ☁️
 </footer>
 
 <!-- MODAL -->
@@ -936,40 +936,67 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- Firebase SDK versión CDN compat — funciona abriendo el archivo directo en el navegador -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
-const STORAGE_KEY = 'buk_marketplace_tracker_v3';
+
+const firebaseConfig = {
+  apiKey:            "AIzaSyBMGiRE4IXuc6ZQouRBG_3If7vwy55Jdg4",
+  authDomain:        "marketplace-buk.firebaseapp.com",
+  projectId:         "marketplace-buk",
+  storageBucket:     "marketplace-buk.firebasestorage.app",
+  messagingSenderId: "554049879414",
+  appId:             "1:554049879414:web:cb945919907f428a2fce57"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db  = firebase.firestore();
+const COL = 'solicitudes';
+
 let data = [];
 let activeFilter = 'all';
 
-// ---- STORAGE (localStorage: persiste en el navegador, sobrevive refrescos y cierre del navegador) ----
+// ---- LOAD: escucha cambios en tiempo real ----
 function load() {
-  try {
-    let raw = localStorage.getItem(STORAGE_KEY);
-    // Migrar desde v2 si existe y v3 no
-    if (!raw) {
-      const v2 = localStorage.getItem('buk_marketplace_tracker_v2');
-      if (v2) raw = v2;
-    }
-    data = raw ? JSON.parse(raw) : [];
-  } catch (e) {
-    console.error('Load error:', e);
-    data = [];
-  }
-  // Migración: versión anterior usaba "Catita" y "C. Holtheuer"
-  data.forEach(d => {
-    if (d.owner === 'Catita') d.owner = 'Catalina Cilveti';
-    if (d.owner === 'C. Holtheuer') d.owner = 'Cata Holtheuer';
+  db.collection(COL).onSnapshot((snapshot) => {
+    data = snapshot.docs.map(d => {
+      const item = d.data();
+      if (item.owner === 'Catita') item.owner = 'Catalina Cilveti';
+      if (item.owner === 'C. Holtheuer') item.owner = 'Cata Holtheuer';
+      return item;
+    });
+    render();
+  }, (error) => {
+    console.error('Firebase error:', error);
+    toast('Error de conexión con Firebase', 'error');
   });
-  render();
 }
-function save() {
+
+// ---- SAVE: guarda/actualiza un documento por id ----
+async function save(item) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    await db.collection(COL).doc(item.id).set(item);
   } catch (e) {
     console.error('Save error:', e);
-    toast('Error al guardar: ' + (e.message || 'storage lleno'), 'error');
+    toast('Error al guardar: ' + (e.message || 'sin conexión'), 'error');
+    throw e;
   }
 }
+
+// ---- DELETE: elimina un documento por id ----
+async function deleteDoc_(id) {
+  try {
+    await db.collection(COL).doc(id).delete();
+  } catch (e) {
+    console.error('Delete error:', e);
+    toast('Error al eliminar: ' + e.message, 'error');
+    throw e;
+  }
+}
+
+window._firebaseSave   = save;
+window._firebaseDelete = deleteDoc_;
 
 // ---- BACKUP / RESTORE (JSON file para no depender solo del navegador) ----
 function exportBackup() {
@@ -1201,29 +1228,35 @@ async function saveItem() {
     partner: document.getElementById('f-partner').value.trim(),
     notas: document.getElementById('f-notas').value.trim()
   };
-  const idx = data.findIndex(d => d.id === id);
-  if (idx >= 0) { data[idx] = item; toast('Solicitud actualizada'); }
-  else { data.push(item); toast('Solicitud agregada'); }
-  await save();
-  closeModal();
-  render();
+  const isEdit = data.some(d => d.id === id);
+  try {
+    await window._firebaseSave(item);
+    toast(isEdit ? 'Solicitud actualizada' : 'Solicitud agregada');
+    closeModal();
+  } catch(e) { /* error ya notificado por _firebaseSave */ }
 }
 async function deleteItem(id) {
   const item = data.find(d => d.id === id);
   if (!item) return;
   if (!confirm('¿Eliminar la solicitud de "' + item.empresa + '"? Esta acción no se puede deshacer.')) return;
-  data = data.filter(d => d.id !== id);
-  await save();
-  render();
-  toast('Solicitud eliminada', 'delete');
+  try {
+    await window._firebaseDelete(id);
+    toast('Solicitud eliminada', 'delete');
+  } catch(e) {}
 }
 async function changeStatus(id, value) {
   const item = data.find(d => d.id === id);
-  if (item) { item.estado = value; await save(); render(); }
+  if (item) {
+    item.estado = value;
+    try { await window._firebaseSave(item); } catch(e) {}
+  }
 }
 async function changeOwner(id, value) {
   const item = data.find(d => d.id === id);
-  if (item) { item.owner = value; await save(); render(); }
+  if (item) {
+    item.owner = value;
+    try { await window._firebaseSave(item); } catch(e) {}
+  }
 }
 
 // ---- EXPORT ----
@@ -1256,7 +1289,7 @@ function exportExcel() {
   toast('Archivo exportado');
 }
 
-// ---- FILTERS ----
+// ---- FILTERS (listeners deben estar en global scope) ----
 document.querySelectorAll('.stat').forEach(s => {
   s.addEventListener('click', () => {
     const f = s.dataset.filter;
@@ -1273,7 +1306,7 @@ document.getElementById('modal').addEventListener('click', (e) => {
   if (e.target.id === 'modal') closeModal();
 });
 
-load();
+load(); // inicia escucha en tiempo real con Firebase
 </script>
 </body>
 </html>
