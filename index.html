@@ -307,6 +307,16 @@
     background: #E09818;
     transform: translateY(-1px);
   }
+  .btn-ghost {
+    background: white;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+  .btn-ghost:hover {
+    border-color: var(--buk-blue);
+    color: var(--buk-blue);
+    background: var(--buk-blue-soft);
+  }
   .search-wrap {
     flex: 1;
     min-width: 220px;
@@ -762,6 +772,13 @@
     <button class="btn btn-yellow" onclick="exportExcel()">
       <span>⬇</span> Exportar Excel
     </button>
+    <button class="btn btn-ghost" onclick="exportBackup()" title="Descarga un .json con toda tu información, por seguridad">
+      <span>💾</span> Backup
+    </button>
+    <label class="btn btn-ghost" title="Carga un backup .json previo" style="cursor:pointer;">
+      <span>📂</span> Restaurar
+      <input type="file" accept="application/json,.json" onchange="importBackup(event)" style="display:none;">
+    </label>
   </div>
 
   <!-- TABLE -->
@@ -924,19 +941,18 @@ const STORAGE_KEY = 'buk_marketplace_tracker_v3';
 let data = [];
 let activeFilter = 'all';
 
-// ---- STORAGE ----
-async function load() {
+// ---- STORAGE (localStorage: persiste en el navegador, sobrevive refrescos y cierre del navegador) ----
+function load() {
   try {
-    let result = await window.storage.get(STORAGE_KEY);
+    let raw = localStorage.getItem(STORAGE_KEY);
     // Migrar desde v2 si existe y v3 no
-    if (!result) {
-      try {
-        const v2 = await window.storage.get('buk_marketplace_tracker_v2');
-        if (v2) result = v2;
-      } catch {}
+    if (!raw) {
+      const v2 = localStorage.getItem('buk_marketplace_tracker_v2');
+      if (v2) raw = v2;
     }
-    data = result ? JSON.parse(result.value) : [];
-  } catch {
+    data = raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    console.error('Load error:', e);
     data = [];
   }
   // Migración: versión anterior usaba "Catita" y "C. Holtheuer"
@@ -946,9 +962,73 @@ async function load() {
   });
   render();
 }
-async function save() {
-  try { await window.storage.set(STORAGE_KEY, JSON.stringify(data)); }
-  catch (e) { console.error('Save error:', e); }
+function save() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.error('Save error:', e);
+    toast('Error al guardar: ' + (e.message || 'storage lleno'), 'error');
+  }
+}
+
+// ---- BACKUP / RESTORE (JSON file para no depender solo del navegador) ----
+function exportBackup() {
+  const payload = {
+    version: 3,
+    exported_at: new Date().toISOString(),
+    count: data.length,
+    data: data
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `buk-marketplace-backup-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Backup descargado (' + data.length + ' solicitudes)');
+}
+
+function importBackup(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const parsed = JSON.parse(e.target.result);
+      // Acepta tanto el formato {data: [...]} como un array plano
+      const incoming = Array.isArray(parsed) ? parsed : parsed.data;
+      if (!Array.isArray(incoming)) throw new Error('Formato inválido');
+
+      const mode = confirm(
+        `¿Reemplazar los datos actuales?\n\n` +
+        `Actualmente tienes ${data.length} solicitudes.\n` +
+        `El backup tiene ${incoming.length} solicitudes.\n\n` +
+        `• Aceptar = REEMPLAZAR todo con el backup\n` +
+        `• Cancelar = FUSIONAR (agregar las del backup a las actuales)`
+      );
+
+      if (mode) {
+        data = incoming;
+      } else {
+        // Fusionar por id, los del backup ganan si hay conflicto
+        const map = new Map(data.map(d => [d.id, d]));
+        incoming.forEach(d => map.set(d.id, d));
+        data = Array.from(map.values());
+      }
+      save();
+      render();
+      toast('Backup cargado: ' + data.length + ' solicitudes');
+    } catch (err) {
+      toast('Archivo inválido: ' + err.message, 'error');
+    }
+    // reset para permitir re-importar el mismo archivo
+    event.target.value = '';
+  };
+  reader.readAsText(file);
 }
 
 // ---- UI HELPERS ----
